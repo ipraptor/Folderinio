@@ -1,0 +1,89 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Tree.txt Viewer</title>
+<style>
+body{font:14px/1.4 system-ui,Segoe UI,Arial;margin:16px}
+#filter{width:320px}
+ul{list-style:none;padding-left:18px;margin:0}
+li{margin:2px 0}
+.disc{cursor:pointer;user-select:none}
+.hidden{display:none}
+.match{font-weight:bold}
+.controls{margin-bottom:10px}
+</style></head><body>
+<div class="controls">
+<input type="file" id="file" accept=".txt">
+<input id="filter" placeholder="Фильтр по имени…"><button id="apply">Применить</button><button id="reset">Сброс</button>
+<button id="expand">Развернуть всё</button><button id="collapse">Свернуть всё</button>
+</div>
+<div id="root"></div>
+<script>
+function depthOf(line){
+  const i=line.search(/([+\\])---/); if(i<0) return null;
+  const pref=line.slice(0,i); let d=0;
+  for(let k=0;k<pref.length;k+=4){const ch=pref.slice(k,k+4); if(ch==="|   "||ch==="    ") d++; else break;}
+  const name=line.slice(i+4).trim(); return {d,name};
+}
+function parse(lines){
+  let rootLabel="ROOT";
+  for(const s of lines){const t=s.trim(); if(/^[A-Za-z]:\\/.test(t)) {rootLabel=t; break;}}
+  const root={name:rootLabel,children:[]}; const stack=[root];
+  for(const raw of lines){
+    const line=raw.replace(/\r?\n$/,""); if(!line.includes("---")) continue;
+    const dn=depthOf(line); if(!dn||!dn.name) continue;
+    let d=dn.d; if(d+1>stack.length) d=stack.length-1; else stack.length=d+1;
+    const node={name:dn.name,children:[]}; stack[stack.length-1].children.push(node); stack.push(node);
+  }
+  return root;
+}
+function build(node){
+  const li=document.createElement('li');
+  const span=document.createElement('span'); span.textContent=node.name; span.className='disc';
+  const ul=document.createElement('ul'); ul.className='hidden';
+  span.onclick=()=>{ul.classList.toggle('hidden');};
+  li.appendChild(span);
+  if(node.children.length){ li.appendChild(ul); for(const ch of node.children) ul.appendChild(build(ch)); }
+  return li;
+}
+function flatten(rootEl){return rootEl.querySelectorAll('li');}
+function setAll(rootEl,open){
+  for(const li of flatten(rootEl)){
+    const ul=li.querySelector(':scope > ul'); if(!ul) continue;
+    if(open) ul.classList.remove('hidden'); else ul.classList.add('hidden');
+  }
+}
+function applyFilter(rootEl,q){
+  q=q.trim().toLowerCase();
+  for(const li of flatten(rootEl)){
+    const span=li.querySelector(':scope > .disc'); const name=span.textContent.toLowerCase();
+    span.classList.remove('match');
+    li.classList.remove('hidden');
+    if(!q) continue;
+    if(name.includes(q)){ span.classList.add('match'); // раскрыть предков
+      let p=li.parentElement; while(p && p.id!=='root'){
+        if(p.tagName==='UL') p.classList.remove('hidden');
+        p=p.parentElement;
+      }
+    } else {
+      li.classList.add('hidden');
+    }
+  }
+  if(!q) setAll(rootEl,true);
+}
+const file=document.getElementById('file');
+const rootDiv=document.getElementById('root');
+document.getElementById('expand').onclick=()=>setAll(rootDiv,true);
+document.getElementById('collapse').onclick=()=>setAll(rootDiv,false);
+document.getElementById('apply').onclick=()=>applyFilter(rootDiv,document.getElementById('filter').value);
+document.getElementById('reset').onclick=()=>{document.getElementById('filter').value=''; applyFilter(rootDiv,'');};
+
+file.onchange=async e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const text=await f.text();
+  const lines=text.split(/\r?\n/).map(s=>s+"\n");
+  const model=parse(lines);
+  rootDiv.innerHTML='';
+  const ul=document.createElement('ul'); rootDiv.appendChild(ul);
+  ul.appendChild(build(model));
+  setAll(rootDiv,true);
+};
+</script></body></html>
