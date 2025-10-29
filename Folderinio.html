@@ -1,89 +1,529 @@
-<!doctype html><html><head><meta charset="utf-8">
-<title>Tree.txt Viewer</title>
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Folderinio Viewer • fast</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-body{font:14px/1.4 system-ui,Segoe UI,Arial;margin:16px}
-#filter{width:320px}
-ul{list-style:none;padding-left:18px;margin:0}
-li{margin:2px 0}
-.disc{cursor:pointer;user-select:none}
-.hidden{display:none}
-.match{font-weight:bold}
-.controls{margin-bottom:10px}
-</style></head><body>
-<div class="controls">
-<input type="file" id="file" accept=".txt">
-<input id="filter" placeholder="Фильтр по имени…"><button id="apply">Применить</button><button id="reset">Сброс</button>
-<button id="expand">Развернуть всё</button><button id="collapse">Свернуть всё</button>
-</div>
-<div id="root"></div>
+:root{--bg:#0b0c0e;--fg:#e6e7e9;--mut:#a7abb3;--card:#111318;--hl:#1e2230;--acc:#7aa2f7;--sideW:360px;--gut:6px}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,Segoe UI,Arial}
+header{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid #1a1d23}
+input[type="text"]{min-width:280px;background:var(--card);border:1px solid #1a1d23;color:var(--fg);padding:8px 10px;border-radius:8px}
+button{background:var(--card);border:1px solid #1a1d23;color:var(--fg);padding:8px 10px;border-radius:8px;cursor:pointer}
+button:hover{border-color:#2a2f3a}
+#toggleStats{margin-left:auto}
+main{display:grid;grid-template-columns:1fr var(--gut) var(--sideW);min-height:calc(100vh - 58px)}
+#treePane{overflow:auto;padding:12px 16px;position:relative}
+#gutter{background:#10131a;cursor:col-resize}
+#stats{border-left:1px solid #1a1d23;background:#0e1015;max-height:calc(100vh - 58px);overflow:auto}
+.panel{padding:12px}
+h3{margin:8px 0 6px;font-size:13px;color:var(--mut)}
+.kpi{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.card{background:var(--card);border:1px solid #1a1d23;border-radius:10px;padding:10px}
+.card b{font-size:18px}
+.badge{display:inline-block;background:#1a1f2b;border:1px solid #22283a;color:var(--fg);padding:4px 8px;border-radius:999px;font-size:12px;margin:0 6px 6px 0}
+
+.tree{list-style:none;margin:0;padding-left:0}
+.node{margin:2px 0}
+.row{display:flex;gap:6px;align-items:center;padding-left:18px}
+.row:hover .name{background:var(--hl)}
+.icon{width:1.1em;text-align:center;opacity:.95;margin-left:-18px}
+.name{padding:1px 4px;border-radius:6px}
+.folder>.row .name{font-weight:600}
+.file>.row .name{font-weight:400}
+.file .icon{color:#f5a97f}
+.folder .icon{color:#8bd5ca}
+.children{margin-left:18px}
+.placeholder{color:var(--mut);font-size:12px;margin-left:18px}
+.match{background:var(--hl)}
+
+.overlay{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(10,12,16,.55);backdrop-filter:saturate(80%) blur(1px);z-index:5}
+.overlay.show{display:flex}
+.spinner{width:38px;height:38px;border:3px solid #2a2f3a;border-top-color:var(--acc);border-radius:50%;animation:sp 1s linear infinite;margin-right:12px}
+@keyframes sp{to{transform:rotate(360deg)}}
+body[data-stats="off"]{--sideW:0px}
+body[data-stats="off"] #stats{display:none}
+.hr{height:1px;background:#1a1d23;margin:10px 0}
+.small{color:#9aa0a6;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <input type="file" id="file" accept=".txt">
+  <input id="filter" placeholder="Фильтр по имени…">
+  <button id="apply">Применить</button>
+  <button id="reset">Сброс</button>
+  <button id="expand">Развернуть</button>
+  <button id="collapse">Свернуть</button>
+  <button id="hideEmpty">Скрыть пустые</button>
+  <button id="toggleStats" title="Показать/скрыть сводку">Сводка ⇄</button>
+</header>
+
+<main>
+  <section id="treePane">
+    <div id="overlay" class="overlay"><div class="spinner"></div><div>Загрузка…</div></div>
+    <ul id="tree" class="tree"></ul>
+  </section>
+  <div id="gutter" title="Потяните, чтобы изменить ширину"></div>
+  <aside id="stats">
+    <div class="panel">
+      <h3>Сводка</h3>
+      <div class="kpi">
+        <div class="card"><div class="small">Директории</div><b id="dirCount">0</b></div>
+        <div class="card"><div class="small">Файлы</div><b id="fileCount">0</b></div>
+        <div class="card"><div class="small">Исполняемые</div><b id="execCount">0</b></div>
+        <div class="card"><div class="small">Уник. расширений</div><b id="extUnique">0</b></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>Исполняемые по расширению</h3>
+      <div id="execBadges"></div>
+      <div class="hr"></div>
+      <details open>
+        <summary>Список путей выбранного типа</summary>
+        <div id="paths" class="small" style="border:1px solid #1a1d23;border-radius:8px;background:#111318;padding:8px;max-height:320px;overflow:auto">Нет данных</div>
+      </details>
+      <div class="hr"></div>
+      <h3>Топ расширений</h3>
+      <div id="topExtBadges"></div>
+      <div class="small" style="padding-top:6px">«Исполняемые»: exe, ps1, cmd, bat, py, js.</div>
+    </div>
+  </aside>
+</main>
+
 <script>
-function depthOf(line){
-  const i=line.search(/([+\\])---/); if(i<0) return null;
-  const pref=line.slice(0,i); let d=0;
-  for(let k=0;k<pref.length;k+=4){const ch=pref.slice(k,k+4); if(ch==="|   "||ch==="    ") d++; else break;}
-  const name=line.slice(i+4).trim(); return {d,name};
-}
-function parse(lines){
-  let rootLabel="ROOT";
-  for(const s of lines){const t=s.trim(); if(/^[A-Za-z]:\\/.test(t)) {rootLabel=t; break;}}
-  const root={name:rootLabel,children:[]}; const stack=[root];
-  for(const raw of lines){
-    const line=raw.replace(/\r?\n$/,""); if(!line.includes("---")) continue;
-    const dn=depthOf(line); if(!dn||!dn.name) continue;
-    let d=dn.d; if(d+1>stack.length) d=stack.length-1; else stack.length=d+1;
-    const node={name:dn.name,children:[]}; stack[stack.length-1].children.push(node); stack.push(node);
+/* ---------- web-worker: парсинг dir /s /b /a-d ---------- */
+const workerSrc = `
+self.onmessage = e=>{
+  const {text, execList} = e.data;
+
+  // строки файла списка
+  const rawLines = text.split(/\\r?\\n/);
+  const lines = rawLines.map(s=>s.trim()).filter(Boolean);
+
+  // множества и подготовка
+  const EXEC = new Set(execList);
+
+  function makeNode(name){
+    return { name, dirs:new Map(), files:[] };
   }
-  return root;
-}
-function build(node){
-  const li=document.createElement('li');
-  const span=document.createElement('span'); span.textContent=node.name; span.className='disc';
-  const ul=document.createElement('ul'); ul.className='hidden';
-  span.onclick=()=>{ul.classList.toggle('hidden');};
-  li.appendChild(span);
-  if(node.children.length){ li.appendChild(ul); for(const ch of node.children) ul.appendChild(build(ch)); }
-  return li;
-}
-function flatten(rootEl){return rootEl.querySelectorAll('li');}
-function setAll(rootEl,open){
-  for(const li of flatten(rootEl)){
-    const ul=li.querySelector(':scope > ul'); if(!ul) continue;
-    if(open) ul.classList.remove('hidden'); else ul.classList.add('hidden');
+
+  const roots = new Map(); // 'C:' -> node
+
+  function getRoot(label){
+    if(!roots.has(label)) roots.set(label, makeNode(label));
+    return roots.get(label);
   }
-}
-function applyFilter(rootEl,q){
-  q=q.trim().toLowerCase();
-  for(const li of flatten(rootEl)){
-    const span=li.querySelector(':scope > .disc'); const name=span.textContent.toLowerCase();
-    span.classList.remove('match');
-    li.classList.remove('hidden');
-    if(!q) continue;
-    if(name.includes(q)){ span.classList.add('match'); // раскрыть предков
-      let p=li.parentElement; while(p && p.id!=='root'){
-        if(p.tagName==='UL') p.classList.remove('hidden');
-        p=p.parentElement;
+
+  function safeExt(n){
+    const i = n.lastIndexOf('.');
+    return (i>0 && i<n.length-1) ? n.slice(i+1).toLowerCase() : "";
+  }
+
+  // строим дерево по каждой строке "C:\\path\\to\\file.ext"
+  for(const line of lines){
+    const m = /^([A-Za-z]:)\\\\(.*)$/.exec(line);
+    if(!m) continue;
+    const drive = m[1];            // "C:"
+    const rest  = m[2];            // "Windows\\explorer.exe"
+    const parts = rest.split('\\\\').filter(Boolean);
+    if(parts.length===0) continue;
+
+    const fileName = parts[parts.length-1];
+    const dirParts = parts.slice(0,-1);
+
+    let cur = getRoot(drive);
+    for(const d of dirParts){
+      if(!cur.dirs.has(d)) cur.dirs.set(d, makeNode(d));
+      cur = cur.dirs.get(d);
+    }
+    cur.files.push(fileName);
+  }
+
+  // метрики
+  const stats = { dirs:0, files:0, exec:0 };
+  const allExtHist = Object.create(null);
+  const extPaths   = Object.create(null);
+  const execMap    = Object.create(null);
+
+  function convertNode(node, basePath, countDir){
+    if(countDir) stats.dirs++;
+
+    const ui = {
+      name: node.name,
+      type: 'dir',
+      ext: '',
+      children: [],
+      empty: false
+    };
+
+    let fileCountBelow = 0;
+
+    // сначала подпапки
+    for(const [subName, subNode] of node.dirs){
+      const subBase = basePath + '\\\\' + subName;
+      const res = convertNode(subNode, subBase, true);
+      ui.children.push(res.ui);
+      fileCountBelow += res.filesBelow;
+    }
+
+    // потом файлы
+    for(const fname of node.files){
+      const fullPath = basePath + '\\\\' + fname;
+      const ext = safeExt(fname);
+
+      ui.children.push({
+        name: fname,
+        type: 'file',
+        ext,
+        children: [],
+        empty: false
+      });
+
+      fileCountBelow += 1;
+      stats.files++;
+
+      if(ext){
+        allExtHist[ext] = (allExtHist[ext]||0)+1;
+        (extPaths[ext] ??= []).push(fullPath);
+        if(EXEC.has(ext)){
+          stats.exec++;
+          (execMap[ext] ??= []).push(fullPath);
+        }
       }
-    } else {
-      li.classList.add('hidden');
+    }
+
+    ui.empty = (fileCountBelow===0);
+    return { ui, filesBelow: fileCountBelow };
+  }
+
+  // финальная модель корня
+  const rootLabels = Array.from(roots.keys());
+  let rootModel;
+
+  if(rootLabels.length===1){
+    const driveLabel = rootLabels[0];
+    const res = convertNode(roots.get(driveLabel), driveLabel, true);
+    rootModel = res.ui;
+  } else {
+    // несколько корней (C:, D:, ...)
+    const syntheticUI = {
+      name: 'ROOT',
+      type: 'dir',
+      ext: '',
+      children: [],
+      empty: false
+    };
+    let totalBelow = 0;
+    for(const label of rootLabels){
+      const res = convertNode(roots.get(label), label, true);
+      syntheticUI.children.push(res.ui);
+      totalBelow += res.filesBelow;
+    }
+    syntheticUI.empty = (totalBelow===0);
+    rootModel = syntheticUI;
+  }
+
+  self.postMessage({root: rootModel, stats, allExtHist, extPaths, execMap});
+};
+`;
+
+/* ---------- decode (кодировка входного txt) ---------- */
+async function readTextSmart(file){
+  const buf = await file.arrayBuffer();
+  const dec = enc=>{ try{return new TextDecoder(enc,{fatal:false}).decode(buf);}catch{return null;} };
+  const cand = [
+    ['utf-8',dec('utf-8')],
+    ['windows-1251',dec('windows-1251')],
+    ['ibm866',dec('ibm866')]
+  ].filter(([,t])=>t!=null);
+
+  function score(s){
+    let bad=0,cyr=0;
+    for(const ch of s){
+      const c=ch.charCodeAt(0);
+      if(c===0xfffd) bad++;
+      if((c>=0x0400&&c<=0x04FF)||(c>=0x0500&&c<=0x052F)) cyr++;
+    }
+    return {bad,cyr};
+  }
+
+  let best=cand[0], bs=score(best[1]);
+  for(const c of cand.slice(1)){
+    const sc=score(c[1]);
+    if(sc.bad<bs.bad || (sc.bad===bs.bad && sc.cyr>bs.cyr)){
+      best=c; bs=sc;
     }
   }
-  if(!q) setAll(rootEl,true);
+  return best[1];
 }
-const file=document.getElementById('file');
-const rootDiv=document.getElementById('root');
-document.getElementById('expand').onclick=()=>setAll(rootDiv,true);
-document.getElementById('collapse').onclick=()=>setAll(rootDiv,false);
-document.getElementById('apply').onclick=()=>applyFilter(rootDiv,document.getElementById('filter').value);
-document.getElementById('reset').onclick=()=>{document.getElementById('filter').value=''; applyFilter(rootDiv,'');};
 
-file.onchange=async e=>{
-  const f=e.target.files[0]; if(!f) return;
-  const text=await f.text();
-  const lines=text.split(/\r?\n/).map(s=>s+"\n");
-  const model=parse(lines);
-  rootDiv.innerHTML='';
-  const ul=document.createElement('ul'); rootDiv.appendChild(ul);
-  ul.appendChild(build(model));
-  setAll(rootDiv,true);
+/* ---------- UI helpers ---------- */
+const treeEl=document.getElementById('tree');
+const overlay=document.getElementById('overlay');
+const EXEC_LIST=['exe','ps1','cmd','bat','py','js'];
+let HIDE_EMPTY=false;
+
+const escHtml=s=>s.replace(/[&<>"']/g,m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const cssSel=s=>s.replace(/["\\]/g,m=>"\\"+m);
+
+/* ---------- render дерева ---------- */
+function renderRoot(model){
+  treeEl.innerHTML='';
+  const li=document.createElement('li');
+  li.className='node folder';
+  li.dataset.empty=model.empty?1:0;
+
+  const row=document.createElement('div');
+  row.className='row';
+  row.innerHTML=`<span class="icon">📁</span><span class="name" data-path="${cssSel(model.name)}">${escHtml(model.name)}</span>`;
+
+  const box=document.createElement('ul');
+  box.className='children';
+
+  li.append(row, box);
+  treeEl.appendChild(li);
+
+  attachFolder(row, box, model.children||[]);
+}
+
+function attachFolder(row, box, children){
+  let built=false;
+  row.style.cursor='pointer';
+
+  row.onclick=()=>{
+    if(!built){
+      if(!children.length){
+        const ph=document.createElement('div');
+        ph.className='placeholder';
+        ph.textContent='папка пуста';
+        box.appendChild(ph);
+      }else{
+        const frag=document.createDocumentFragment();
+        for(const n of children){
+          if(n.type==='file'){
+            const li=document.createElement('li');
+            li.className='node file';
+            const r=document.createElement('div');
+            r.className='row';
+
+            const full=row.querySelector('.name').dataset.path + '\\' + n.name;
+            r.innerHTML=`<span class="icon">📄</span><span class="name" data-path="${cssSel(full)}">${escHtml(n.name)}</span>`;
+
+            li.appendChild(r);
+            frag.appendChild(li);
+          }else{
+            const li=document.createElement('li');
+            li.className='node folder';
+            li.dataset.empty=n.empty?1:0;
+            if(HIDE_EMPTY && n.empty) li.style.display='none';
+
+            const r=document.createElement('div');
+            r.className='row';
+
+            const full=row.querySelector('.name').dataset.path + '\\' + n.name;
+            r.innerHTML=`<span class="icon">📁</span><span class="name" data-path="${cssSel(full)}">${escHtml(n.name)}</span>`;
+
+            const kids=document.createElement('ul');
+            kids.className='children';
+
+            li.append(r, kids);
+            attachFolder(r, kids, n.children||[]);
+            frag.appendChild(li);
+          }
+        }
+        box.appendChild(frag);
+      }
+      built=true;
+      box.style.display='';
+    }else{
+      box.style.display = box.style.display==='none' ? '' : 'none';
+    }
+  };
+}
+
+/* ---------- фильтр ---------- */
+function filterTree(q){
+  q=(q||'').trim().toLowerCase();
+  const names=document.querySelectorAll('.name');
+  for(const n of names) n.classList.remove('match');
+
+  if(!q){
+    for(const b of document.querySelectorAll('.children')) b.style.display='';
+    return;
+  }
+
+  // свернуть все
+  for(const r of document.querySelectorAll('.folder>.row')) r.nextElementSibling.style.display='none';
+
+  // подсветка совпадений и раскрытие веток до них
+  for(const n of names){
+    if(n.textContent.toLowerCase().includes(q)){
+      n.classList.add('match');
+      let el=n.closest('.node');
+      while(el){
+        const box=el.querySelector(':scope > .children');
+        if(box) box.style.display='';
+        el=el.parentElement?.closest('.node');
+      }
+    }
+  }
+}
+
+/* ---------- stats UI ---------- */
+function renderBadges(id, mapOrHist, click){
+  const el=document.getElementById(id);
+  el.innerHTML='';
+  const arr=Object.entries(mapOrHist)
+    .map(([k,v])=>[k, Array.isArray(v)?v.length:v])
+    .sort((a,b)=>b[1]-a[1]);
+  if(arr.length===0){
+    el.innerHTML='<span class="small">Нет данных</span>';
+    return;
+  }
+  for(const [k,c] of arr.slice(0,80)){
+    const b=document.createElement('button');
+    b.className='badge';
+    b.textContent=`${k} · ${c}`;
+    b.onclick=()=>click(k);
+    el.appendChild(b);
+  }
+}
+
+function renderPathsFor(ext, pathsByExt){
+  const box=document.getElementById('paths');
+  const list=pathsByExt[ext]||[];
+  box.innerHTML = list.length ? '' : 'Нет данных';
+
+  const frag=document.createDocumentFragment();
+  for(const p of list){
+    const d=document.createElement('div');
+    d.innerHTML=`<a href="#" class="small">${escHtml(p)}</a>`;
+    d.firstChild.onclick=(e)=>{
+      e.preventDefault();
+      focusPath(p);
+    };
+    frag.appendChild(d);
+  }
+  box.appendChild(frag);
+}
+
+function focusPath(p){
+  const target=document.querySelector(`.name[data-path="${cssSel(p)}"]`);
+  if(target){
+    target.scrollIntoView({block:'center',behavior:'smooth'});
+    target.style.outline=`2px solid var(--acc)`;
+    setTimeout(()=>target.style.outline='',800);
+  }
+}
+
+/* ---------- controls ---------- */
+document.getElementById('apply').onclick=()=>filterTree(document.getElementById('filter').value);
+
+document.getElementById('reset').onclick=()=>{
+  document.getElementById('filter').value='';
+  filterTree('');
 };
-</script></body></html>
+
+document.getElementById('expand').onclick=()=>{
+  for(const r of document.querySelectorAll('.folder>.row')){
+    const box=r.nextElementSibling;
+    if(box && box.style.display==='none') r.click();
+  }
+};
+
+document.getElementById('collapse').onclick=()=>{
+  for(const r of document.querySelectorAll('.folder>.row')){
+    const box=r.nextElementSibling;
+    if(box && box.style.display!=='none') r.click();
+  }
+};
+
+document.getElementById('toggleStats').onclick=()=>{
+  document.body.setAttribute(
+    'data-stats',
+    document.body.getAttribute('data-stats')==='off' ? 'on' : 'off'
+  );
+};
+
+document.getElementById('filter').addEventListener('keydown',e=>{
+  if(e.key==='Enter') document.getElementById('apply').click();
+});
+
+document.getElementById('hideEmpty').onclick=()=>{
+  HIDE_EMPTY = !HIDE_EMPTY;
+  document.getElementById('hideEmpty').textContent = HIDE_EMPTY ? 'Показать пустые' : 'Скрыть пустые';
+  for(const li of document.querySelectorAll('.node.folder')){
+    if(li.dataset.empty==='1'){
+      li.style.display = HIDE_EMPTY ? 'none' : '';
+    }
+  }
+};
+
+/* ---------- resizable sidebar ---------- */
+(function(){
+  const gut=document.getElementById('gutter');
+  let drag=false;
+  const min=240,max=720;
+  const setW=w=>document.documentElement.style.setProperty('--sideW', Math.max(min,Math.min(max,w))+'px');
+
+  gut.onmousedown=e=>{
+    drag=true;
+    e.preventDefault();
+    if(document.body.getAttribute('data-stats')==='off'){
+      document.body.setAttribute('data-stats','on');
+    }
+  };
+
+  window.onmousemove=e=>{
+    if(!drag) return;
+    const rect=document.querySelector('main').getBoundingClientRect();
+    const side=rect.right-e.clientX;
+    setW(side);
+  };
+
+  window.onmouseup=()=>{drag=false;};
+})();
+
+/* ---------- загрузка файла ---------- */
+const fileInput=document.getElementById('file');
+
+fileInput.onchange=async e=>{
+  const f=e.target.files[0];
+  if(!f) return;
+
+  overlay.classList.add('show');
+
+  const text=await readTextSmart(f);
+
+  const workerURL = URL.createObjectURL(
+    new Blob([workerSrc],{type:'application/javascript'})
+  );
+
+  const w=new Worker(workerURL);
+
+  const payload=await new Promise(res=>{
+    w.onmessage=ev=>{
+      w.terminate();
+      URL.revokeObjectURL(workerURL);
+      res(ev.data);
+    };
+    w.postMessage({text, execList: EXEC_LIST});
+  });
+
+  renderRoot(payload.root);
+
+  dirCount.textContent  = payload.stats.dirs.toLocaleString('ru-RU');
+  fileCount.textContent = payload.stats.files.toLocaleString('ru-RU');
+  execCount.textContent = payload.stats.exec.toLocaleString('ru-RU');
+  extUnique.textContent = Object.keys(payload.allExtHist).length.toLocaleString('ru-RU');
+
+  renderBadges('execBadges', payload.execMap, ext=>renderPathsFor(ext, payload.execMap));
+  renderBadges('topExtBadges', payload.allExtHist, ext=>renderPathsFor(ext, payload.extPaths));
+
+  overlay.classList.remove('show');
+};
+</script>
+</body>
+</html>
